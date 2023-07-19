@@ -1,0 +1,305 @@
+﻿@page "/managevirtualmachines"
+@page "/ManageVirtualMachines/{IdCompany:int}"
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.WebAssembly.Authentication
+
+@attribute [Authorize(Roles = Platform.Shared.ROLES.ADMINISTRATOR_NAME)]
+@inject HttpClient Http
+@inject VirtualMachineService virtualMachineService 
+<h3>Máquinas Virtuais de @companyName</h3>
+
+<table class="table">
+    <thead>
+        <tr>
+            <th>Nome</th>
+            <th>Cloud</th>
+            <th>Descrição</th>
+            <th>Resource Group Id</th>
+            <th>Subscription Id</th>
+        </tr>
+    </thead>
+    <tbody>
+
+        @if (virtualMachines == null)
+        {
+            <div class="spinner"></div>
+        }
+        else
+        {
+
+            @if (!virtualMachines.Any())
+            {
+                <p><em>Nenhum registro encontrado</em></p>
+            }
+            else
+            {
+                @foreach (var user in virtualMachines)
+                {
+    <tr>
+        <td>@user.Name</td>
+        <td>@user.Cloud</td>
+        <td>@user.Description</td>
+        <td>@user.ResourceGroupId</td>
+        <td>@user.SubscriptionId</td>
+
+
+        <td>
+            <button class="btn btn-primary"
+                    @onclick="(() => Edit(user))">
+                Edit
+            </button>
+        </td>
+    </tr>
+                }
+            }
+
+        }
+
+    </tbody>
+</table>
+@if (ShowPopup)
+{
+    <div class="modal" tabindex="-1" style="display:block" role="dialog">
+        <div class="modal-dialog">
+            <div class="modal-content">
+
+
+                <div class="modal-header">
+                    <h3 class="modal-title">Editar Virtual Machine</h3>
+
+                    <button type="button" class="close"
+                            @onclick="ClosePopup">
+                        <span aria-hidden="true">X</span>
+                    </button>
+                </div>
+
+                <div class="modal-body"  >
+
+                    <EditForm Model="@objUser" OnValidSubmit="@Save">
+                        <DataAnnotationsValidator />
+                        @*<ValidationSummary />*@
+                        <div class="row">
+                            <div class="col-md-12">
+                                <div class="form-group">
+                                    <label for="Name" class="control-label">Nome exibicao</label>
+                                    <input for="Name" class="form-control" @bind="@objUser.Name" />
+                                    <ValidationMessage For="@(()=> objUser.Name)" />
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="Cloud" class="control-label">Cloud</label>
+                                    <select id="Cloud" class="form-control" @bind="@objUser.Cloud" required>
+                                        <option value="">Selecione uma opção</option>
+                                        <option value="AWS">AWS</option>
+                                        <option value="AZURE">AZURE</option>
+                                    </select>
+                                    <ValidationMessage For="@(()=> objUser.Cloud)" />
+                                </div>
+
+                                @{ if (string.IsNullOrEmpty(objUser.ResourceGroupId) || !Guid.TryParse(objUser.ResourceGroupId, out _))
+                                    {
+                                        objUser.ResourceGroupId = Guid.NewGuid().ToString();
+                                    } }
+
+                                @{ if (string.IsNullOrEmpty(objUser.SubscriptionId) || !Guid.TryParse(objUser.SubscriptionId, out _))
+                                    {
+                                        objUser.SubscriptionId = Guid.NewGuid().ToString();
+                                    } }
+
+                                <div class="form-group">
+                                    <label for="ResourceGroupId" class="control-label">ResourceGroupId</label>
+                                    <input for="ResourceGroupId" class="form-control" @bind="@objUser.ResourceGroupId" />
+                                    <ValidationMessage For="@(()=> objUser.ResourceGroupId)" />
+                                </div>
+                                <div class="form-group">
+                                    <label for="SubscriptionId" class="control-label">SubscriptionId</label>
+                                    <input for="SubscriptionId" class="form-control" @bind="@objUser.SubscriptionId"/>
+                                    <ValidationMessage For="@(()=> objUser.SubscriptionId)" />
+                                </div>
+
+
+                                <div class="form-group">
+                                    <label for="Name" class="control-label">Nome Virtual-Machine (Monitoramento)</label>
+                                    <input for="Name" class="form-control" @bind="@objUser.VirtualMachineMonitoring" />
+                                    <ValidationMessage For="@(()=> objUser.VirtualMachineMonitoring)" />
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="Description" class="control-label">Description</label>
+                                    <input for="Description" class="form-control" @bind="@objUser.Description" />
+                                    <ValidationMessage For="@(()=> objUser.Description)" />
+
+                                </div>
+
+                            </div>
+                        </div>
+                        <div class="row">
+                            <div class="col-md-6">
+                                <input type="submit" class="btn btn-primary" value="Salvar" />&nbsp;
+                                @if (objUser.Id >= 0)
+                                {
+                                    <input type="submit" class="btn btn-danger" value="Excluir" @onclick="Delete" />
+                                }
+                            </div>
+                        </div>
+                    </EditForm>
+
+                    <br />
+                    <span style="color:red">@mensagemErro</span>
+                    <span style="color:green">@mensagemSucesso</span>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+<button class="btn btn-success" @onclick="AddNew">Nova VM</button>
+
+
+
+
+@code {
+    [Parameter]
+    public int IdCompany { get; set; }
+
+    private CompanyModel currentCompany;
+    private List<VirtualMachineModel> virtualMachines;
+    private VirtualMachineModel objUser;
+    private string mensagemErro;
+    private string CurrentUserRole;
+    private string mensagemSucesso;
+    private bool ShowPopup;
+    private List<RoleModel> Roles;
+    private string companyName = "";
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            mensagemSucesso = "";
+            mensagemErro = "";
+            @*users = await Http.GetFromJsonAsync<List<PlatformUser>>("Account");*@
+
+            var companiesTaask = Http.GetFromJsonAsync<List<CompanyModel>>($"ManageCompany?ids={IdCompany}");
+            var virtualMachinesTask = Http.GetFromJsonAsync<List<VirtualMachineModel>>($"ManageVirtualMachine?IdCompany={IdCompany}");
+
+            await Task.WhenAll(companiesTaask, virtualMachinesTask);
+
+            currentCompany = (await companiesTaask).FirstOrDefault();
+
+            companyName = currentCompany.Name;
+            virtualMachines = await virtualMachinesTask;
+
+        }
+        catch (AccessTokenNotAvailableException ex)
+        {
+            ex.Redirect();
+        }
+        catch (Exception ex)
+        {
+            mensagemErro = ex.ToString();
+        }
+    }
+
+
+    public async Task Edit(VirtualMachineModel userObj)
+    {
+        try
+        {
+            mensagemSucesso = "";
+            mensagemErro = "";
+            objUser = userObj;
+
+            @*CurrentUserRole = objUser.Roles.FirstOrDefault();*@
+        ShowPopup = true;
+    }
+    catch (AccessTokenNotAvailableException ex)
+    {
+        ex.Redirect();
+    }
+    catch (Exception ex)
+    {
+        mensagemErro = ex.ToString();
+    }
+}
+
+void AddNew()
+{
+    // Make new user
+    objUser = new VirtualMachineModel();
+    objUser.Name = null;
+    objUser.Id = 0;
+
+    ShowPopup = true;
+}
+
+
+async Task Save()
+{
+    try
+    {
+        mensagemSucesso = "";
+        mensagemErro = "";
+        var response = await virtualMachineService.SaveVirtualMachineAsync(objUser, IdCompany);
+        if (response.Success)
+        {
+            if (!virtualMachines.Contains(objUser))
+            {
+                virtualMachines.Add(objUser);
+            }
+            ShowPopup = false;
+            mensagemSucesso = response.SuccessMessage;
+        }
+        else
+        {
+            mensagemErro = response.ErrorMessage;
+        }
+    }
+    catch (AccessTokenNotAvailableException ex)
+    {
+        ex.Redirect();
+    }
+    catch (Exception ex)
+    {
+        mensagemErro = ex.ToString();
+    }
+
+
+}
+
+async Task Delete()
+{
+    try
+    {
+        var response = await virtualMachineService.DeleteVirtualMachine(objUser);
+        if (response.Success)
+        {
+            if (virtualMachines.Contains(objUser))
+            {
+                virtualMachines.Remove(objUser);
+            }
+            ShowPopup = false;
+            mensagemSucesso = response.SuccessMessage;
+        }
+        else
+        {
+            mensagemErro = response.ErrorMessage;
+        }
+
+    }
+    catch (AccessTokenNotAvailableException ex)
+    {
+        ex.Redirect();
+    }
+    catch (Exception ex)
+    {
+        mensagemErro = ex.ToString();
+    }
+}
+
+void ClosePopup()
+{
+    // Close the Popup
+    ShowPopup = false;
+}
+
+
+}
