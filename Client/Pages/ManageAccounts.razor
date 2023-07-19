@@ -1,0 +1,721 @@
+﻿@page "/ManageAccounts"
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.WebAssembly.Authentication
+@attribute [Authorize(Roles = Platform.Shared.ROLES.ADMINISTRATOR_NAME)]
+@inject HttpClient Http
+@inject NavigationManager NavigationManager
+@inject SchedulingUIService schedulingUIService
+@inject IJSRuntime JsRuntime
+@inject ManageAccountsService manageAccountsService 
+<h3>Administração de usuários</h3>
+
+
+<table class="table">
+    <thead>
+        <tr>
+            <th>Nome</th>
+            <th>E-mail</th>
+            <th>Função</th>
+            <th></th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+        @if (users == null)
+        {
+            <p><em>Carregando...</em></p>
+            <div class="spinner"></div>
+        }
+        else
+        {
+            if (!users.Any())
+            {
+                <p><em>Nenhum usuario encontrado</em></p>
+            }
+            else
+            {
+                @foreach (var user in users)
+                {
+                    <tr>
+                        <td>@user.FullName</td>
+                        <td>@user.Email</td>
+                        <td>@user.Roles?.FirstOrDefault()</td>
+                        <td>
+
+                            @if (IsRunnig)
+                            {
+                                <img src="images/ajax-spinner.gif" alt="Aguarde..." style="height:30px" />
+                            }
+                            else
+                            {
+                                <button class="btn btn-primary"
+                                        @onclick="(() => EditUser(user))">
+                                    Edit
+                                </button>
+                            }
+
+
+
+                        </td>
+
+
+                        <td>
+                            @if (user.Roles?.FirstOrDefault()?.Equals(ROLES.ADMINISTRATOR_NAME, StringComparison.OrdinalIgnoreCase) ?? false)
+                            {
+                                <span>-</span>
+                            }
+                            else
+                            {
+                                @if (IsRunnig)
+                                {
+                                    <img src="images/ajax-spinner.gif" alt="Aguarde..." style="height:30px" />
+                                }
+                                else
+                                {
+                                    <button class="btn btn-primary"
+                                            @onclick="(() => EditUserVMSchedules(user))">
+                                        Scheduling
+                                    </button>
+                                }
+                            }
+
+
+
+                        </td>
+
+                    </tr>
+                }
+            }
+
+        }
+
+    </tbody>
+</table>
+@if (ShowUserDetailPopUp)
+{
+    <div class="modal" tabindex="-1" style="display:block" role="dialog">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 class="modal-title">Editar usuário</h3>
+
+                    <button type="button" class="close"
+                            @onclick="ClosePopup">
+                        <span aria-hidden="true">X</span>
+                    </button>
+                </div>
+
+                <div class="modal-body">
+
+
+                    @if (objUser.Id != "")
+                    {
+                        <p>@objUser.FullName</p>
+                    }
+
+
+                    <label>Nome completo do usuario:</label>
+                    <input class="form-control" type="text" placeholder="Nome completo" @bind="objUser.FullName" />
+
+
+                    <label>E-mail:</label>
+                    <input class="form-control" type="text" placeholder="E-mail" @bind="objUser.Email" />
+
+                    <br /><br />
+
+                    <label>Senha:</label>
+                    <input class="form-control" type="password"
+                           placeholder="Senha"
+                           @bind="objUser.Password" />
+                    <label>Repetir Senha:</label>
+                    <input class="form-control" type="password"
+                           placeholder="Repetir senha"
+                           @bind="objUser.PasswordRepeat" />
+
+                    <br /><br />
+
+                    <label>Função:</label>
+                    <select class="form-control" @onchange="OnSelectedRoleChanged">
+                        @foreach (var role in Roles)
+                        {
+                            <option value="@role.Name" selected="@role.Name.Equals(CurrentUserRole, StringComparison.OrdinalIgnoreCase)">
+                                @role.Name
+                            </option>
+                        }
+                    </select>
+                    <br /><br />
+
+
+                 
+
+
+                    <br /><br />
+                    @if (IsRunnig)
+                    {
+                        <img src="images/ajax-spinner.gif" alt="Aguarde..." style="height:30px" />
+                    }
+                    else
+                    {
+                        <button class="btn btn-primary"
+                                @onclick="SaveUser">
+                            Salvar &nbsp;
+                        </button>
+
+                        @if (objUser.Id != "")
+                        {
+                            <button class="btn btn-danger"
+                                    @onclick="DeleteUser">
+                                Excluir
+                            </button>
+                        }
+                        <br />
+                        <span style="color:red">@mensagemErro</span>
+                        <span style="color:green">@mensagemSucesso</span>
+                    }
+
+                </div>
+            </div>
+        </div>
+
+
+    </div>
+}
+
+
+
+@if (ShowUserSchedulesPopUp)
+{
+    <div class="modal" tabindex="-1" style="display:block" role="dialog">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 class="modal-title">Scheduling</h3>
+
+                    <button type="button" class="close"
+                            @onclick="CloseSchedulePopup">
+                        <span aria-hidden="true">X</span>
+                    </button>
+                </div>
+
+                <div class="modal-body">
+
+                    <p>@objUser.FullName</p>
+
+                    <div id="checkboxes">
+                        <label>Permissoes especiais:</label>
+                        <ul>
+
+
+                            @if (ClienteClaims != null)
+                            {
+                                @foreach (var claim in ClienteClaims)
+                                {
+                                    <li class="no-bullet">
+                                        <input type="checkbox" value="@claim" @onchange="@((e) => OnStartOrStopScheduleCheckboxChanged(e, claim))" checked="@UserClaims.Any(f => f.Type == claim.Type)"> @claim.FriendlyDescription
+                                    </li>
+
+                                    @if (claim.Type.Equals(ClaimsConstants.PERMISSION_CLAIM_CAN_START_VM, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        <div class="row">
+                                            <div class="col-md-12">
+                                                <div class="form-group">
+                                                    <label for="Name" class="control-label">De</label>
+                                                    <input type="time"    @bind="StartVMSchedule.StartTime" disabled="@StartVMScheduleIsDisabled">
+                                                    <label for="Name" class="control-label">Até</label>
+                                                    <input type="time"   @bind="StartVMSchedule.EndTime"  disabled="@StartVMScheduleIsDisabled">
+                                                </div>
+
+                                                <div class="form-group">
+                                                    <label for="Name" class="control-label">Nesses dias:</label>
+                                                    <li class="no-bullet"><input type="checkbox" disabled="@StartVMScheduleIsDisabled" value="@DayOfWeek.Monday" @onchange="@((e) => OnVMScheduleOnStartOrStopScheduleCheckboxChanged(e, StartVMSchedule, DayOfWeek.Monday))" checked="@StartVMSchedule.WeekDayMonday"> Segunda-feira </li>
+                                                    <li class="no-bullet"><input type="checkbox" disabled="@StartVMScheduleIsDisabled" value="@DayOfWeek.Tuesday" @onchange="@((e) => OnVMScheduleOnStartOrStopScheduleCheckboxChanged(e, StartVMSchedule, DayOfWeek.Tuesday))" checked="@StartVMSchedule.WeekDayTuesday"> Terça-feira </li>
+                                                    <li class="no-bullet"><input type="checkbox" disabled="@StartVMScheduleIsDisabled" value="@DayOfWeek.Wednesday" @onchange="@((e) => OnVMScheduleOnStartOrStopScheduleCheckboxChanged(e, StartVMSchedule, DayOfWeek.Wednesday))" checked="@StartVMSchedule.WeekDayWednesday"> Quarta-feira </li>
+                                                    <li class="no-bullet"><input type="checkbox" disabled="@StartVMScheduleIsDisabled" value="@DayOfWeek.Thursday" @onchange="@((e) => OnVMScheduleOnStartOrStopScheduleCheckboxChanged(e, StartVMSchedule, DayOfWeek.Thursday))" checked="@StartVMSchedule.WeekDayThursday"> Quinta-feira </li>
+                                                    <li class="no-bullet"><input type="checkbox" disabled="@StartVMScheduleIsDisabled" value="@DayOfWeek.Friday" @onchange="@((e) => OnVMScheduleOnStartOrStopScheduleCheckboxChanged(e, StartVMSchedule, DayOfWeek.Friday))" checked="@StartVMSchedule.WeekDayFriday"> Sexta-feira </li>
+                                                    <li class="no-bullet"><input type="checkbox" disabled="@StartVMScheduleIsDisabled" value="@DayOfWeek.Saturday" @onchange="@((e) => OnVMScheduleOnStartOrStopScheduleCheckboxChanged(e, StartVMSchedule, DayOfWeek.Saturday))" checked="@StartVMSchedule.WeekDaySaturday" > Sábado </li>
+                                                    <li class="no-bullet"><input type="checkbox" disabled="@StartVMScheduleIsDisabled" value="@DayOfWeek.Sunday" @onchange="@((e) => OnVMScheduleOnStartOrStopScheduleCheckboxChanged(e, StartVMSchedule, DayOfWeek.Sunday))" checked="@StartVMSchedule.WeekDaySunday"> Domingo </li>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    }
+                                    else if (claim.Type.Equals(ClaimsConstants.PERMISSION_CLAIM_CAN_STOP_VM, StringComparison.OrdinalIgnoreCase))
+                                    {
+
+                                        <div class="row">
+                                            <div class="col-md-12">
+                                                <div class="form-group">
+                                                    <label for="Name" class="control-label">De</label>
+                                                    <input type="time"   @bind="StopVMSchedule.StartTime" disabled="@StopVMScheduleIsDisabled">
+                                                    <label for="Name" class="control-label">Até</label>
+                                                    <input type="time"  @bind="StopVMSchedule.EndTime"  disabled="@StopVMScheduleIsDisabled">
+                                                </div>
+
+                                                <div class="form-group">
+                                                    <label for="Name" class="control-label">Nesses dias:</label>
+                                                    <li class="no-bullet"><input type="checkbox" value="@DayOfWeek.Monday" disabled="@StopVMScheduleIsDisabled" @onchange="@((e) => OnVMScheduleOnStartOrStopScheduleCheckboxChanged(e, StopVMSchedule, DayOfWeek.Monday))" checked="@StopVMSchedule.WeekDayMonday"> Segunda-feira </li>
+                                                    <li class="no-bullet"><input type="checkbox" value="@DayOfWeek.Tuesday" disabled="@StopVMScheduleIsDisabled" @onchange="@((e) => OnVMScheduleOnStartOrStopScheduleCheckboxChanged(e, StopVMSchedule, DayOfWeek.Tuesday))" checked="@StopVMSchedule.WeekDayTuesday"> Terça-feira </li>
+                                                    <li class="no-bullet"><input type="checkbox" value="@DayOfWeek.Wednesday" disabled="@StopVMScheduleIsDisabled" @onchange="@((e) => OnVMScheduleOnStartOrStopScheduleCheckboxChanged(e, StopVMSchedule, DayOfWeek.Wednesday))" checked="@StopVMSchedule.WeekDayWednesday"> Quarta-feira </li>
+                                                    <li class="no-bullet"><input type="checkbox" value="@DayOfWeek.Thursday" disabled="@StopVMScheduleIsDisabled" @onchange="@((e) => OnVMScheduleOnStartOrStopScheduleCheckboxChanged(e, StopVMSchedule, DayOfWeek.Thursday))" checked="@StopVMSchedule.WeekDayThursday"> Quinta-feira </li>
+                                                    <li class="no-bullet"><input type="checkbox" value="@DayOfWeek.Friday" disabled="@StopVMScheduleIsDisabled" @onchange="@((e) => OnVMScheduleOnStartOrStopScheduleCheckboxChanged(e, StopVMSchedule, DayOfWeek.Friday))" checked="@StopVMSchedule.WeekDayFriday"> Sexta-feira </li>
+                                                    <li class="no-bullet"><input type="checkbox" value="@DayOfWeek.Saturday" disabled="@StopVMScheduleIsDisabled" @onchange="@((e) => OnVMScheduleOnStartOrStopScheduleCheckboxChanged(e, StopVMSchedule, DayOfWeek.Saturday))" checked="@StopVMSchedule.WeekDaySaturday"> Sábado </li>
+                                                    <li class="no-bullet"><input type="checkbox" value="@DayOfWeek.Sunday" disabled="@StopVMScheduleIsDisabled" @onchange="@((e) => OnVMScheduleOnStartOrStopScheduleCheckboxChanged(e, StopVMSchedule, DayOfWeek.Sunday))" checked="@StopVMSchedule.WeekDaySunday"> Domingo </li>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    }
+                                }
+                            }
+
+
+                        </ul>
+                    </div>
+
+
+
+
+
+
+                    <br />
+                    @if (IsRunnig)
+                    {
+                        <img src="images/ajax-spinner.gif" alt="Aguarde..." style="height:30px" />
+                    }
+                    else
+                    {
+                        <button class="btn btn-primary"
+                                @onclick="SaveUserSchedule">
+                            Atualizar &nbsp;
+                        </button>
+
+
+                        <br />
+                        <span style="color:red">@mensagemErro</span>
+                        <span style="color:green">@mensagemSucesso</span>
+                    }
+                </div>
+
+     
+            </div>
+        </div>
+
+
+    </div>
+}
+
+@if (IsRunnig)
+{
+    <img src="images/ajax-spinner.gif" alt="Aguarde..." style="height:30px" />
+}
+else
+{
+    @if (users != null)
+    {
+        <button class="btn btn-success" @onclick="AddNewUser">Novo Usuario</button>
+        @*<button class="btn btn-success" @onclick="NavigateToCustomersPage">Gerenciar Empresaas</button>*@
+    }
+}
+
+
+
+@code {
+
+    private eDayOfWeekEF[] weekDays = DateAndTimeExtensions.GetAllWeekDays();
+    private bool ShowUserSchedulesPopUp { get; set; }
+
+    private List<UserModel> users;
+    private UserModel objUser;
+    private string mensagemErro;
+    private string CurrentUserRole;
+    private string mensagemSucesso;
+    private bool ShowUserDetailPopUp { get; set; }
+    private List<RoleModel> Roles;
+    private AppClaimModel[] ClienteClaims;
+    private AppClaimModel[] AdminClaims;
+    private bool IsRunnig = false;
+    /// <summary>
+    /// Relacao de claims-de-permissao que o usuario atual possui.
+    /// </summary>
+    private List<AppClaimModel> UserClaims;
+
+
+    /// <summary>
+    /// Schedule que define quando o usuario-selecionado (em edicao) pode ligar Virtual machines.
+    /// </summary>
+    private UserVMScheduling StartVMSchedule { get; set; }
+
+    private bool StartVMScheduleIsDisabled { get; set; }
+    private bool StopVMScheduleIsDisabled { get; set; }
+
+    /// <summary>
+    /// Schedule que define quando o usuario-selecionado (em edicao) pode desligar Virtual machines.
+    /// </summary>
+    private UserVMScheduling StopVMSchedule { get; set; }
+
+    /// <summary>
+    /// Relacao com todas as claims-de-permissao que este App Blazor da Op2b possui.
+    /// </summary>
+    private IList<AppClaimModel> AllPermissionClaims;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            mensagemSucesso = "";
+            mensagemErro = "";
+
+            IsRunnig = true;
+            var usersTask = Http.GetFromJsonAsync<List<UserModel>>("Account");
+            var rolesTask = Http.GetFromJsonAsync<List<RoleModel>>("AccountRoles");
+
+            await Task.WhenAll(usersTask, rolesTask);
+
+            users = await usersTask;
+            Roles = await rolesTask;
+        }
+        catch (AccessTokenNotAvailableException ex)
+        {
+            ex.Redirect();
+        }
+        catch (Exception ex)
+        {
+            mensagemErro = ex.ToString();
+        }
+        finally
+        {
+            IsRunnig = false;
+        }
+    }
+
+
+    public async Task EditUser(UserModel userObj)
+    {
+        try
+        {
+            IsRunnig = true;
+            mensagemSucesso = "";
+            mensagemErro = "";
+            objUser = userObj;
+
+            CurrentUserRole = objUser.Roles.FirstOrDefault();
+
+            ShowUserDetailPopUp = true;
+        }
+        catch (AccessTokenNotAvailableException ex)
+        {
+            ex.Redirect();
+        }
+        catch (Exception ex)
+        {
+            mensagemErro = ex.ToString();
+        }
+        finally
+        {
+            IsRunnig = false;
+        }
+    }
+
+
+    /// <summary>
+    /// Exibe a PopUp que permite ao usuario nao-admin ligar/desligar as VMs que ele tem acesso em dias/horarios especificos.
+    /// </summary>
+    /// <param name="userObj"></param>
+    /// <returns></returns>
+    public async Task EditUserVMSchedules(UserModel userObj)
+    {
+        try
+        {
+            IsRunnig = true;
+            mensagemSucesso = "";
+            mensagemErro = "";
+            objUser = userObj;
+
+
+
+
+            if (userObj.Roles.Contains(ROLES.ADMINISTRATOR_NAME))
+            {
+                await JsRuntime.InvokeAsync<object>("alert", "Administradores não podem ter acesso restringido por scheduling.");
+                ShowUserSchedulesPopUp = false;
+                return;
+            }
+
+
+
+
+            var schedules = await schedulingUIService.GetAsync(objUser.Id);
+
+            StartVMSchedule = schedules.Item.FirstOrDefault(f => f.ActionType == eVMActionTypes.Start);
+            StopVMSchedule = schedules.Item.FirstOrDefault(f => f.ActionType == eVMActionTypes.Stop);
+
+            if (StartVMSchedule == null)
+            {
+                StartVMSchedule = UserVMScheduling.CreateEmpty(objUser.Id, eVMActionTypes.Start );
+            }
+
+            if (StopVMSchedule == null)
+            {
+                StopVMSchedule = UserVMScheduling.CreateEmpty(objUser.Id, eVMActionTypes.Stop );
+            }
+
+            UserClaims = await Http.GetFromJsonAsync<List<AppClaimModel>>($"UserClaims?userId={objUser.Id}");
+
+
+
+            ClienteClaims = Platform.Shared.Extensions.ClaimsPermissionsExtensions.GetClientesClaims();
+            AdminClaims = Platform.Shared.Extensions.ClaimsPermissionsExtensions.GetAdminClaims();
+            AllPermissionClaims = ClienteClaims.Join(AdminClaims);
+
+            Console.WriteLine(Newtonsoft.Json.JsonConvert.SerializeObject(ClienteClaims));
+
+            StartVMScheduleIsDisabled = !UserClaims.Contains(ClaimsConstants.PERMISSION_CLAIM_CAN_START_VM);
+            StopVMScheduleIsDisabled = !UserClaims.Contains(ClaimsConstants.PERMISSION_CLAIM_CAN_STOP_VM);
+
+            ShowUserSchedulesPopUp = true;
+        }
+        catch (AccessTokenNotAvailableException ex)
+        {
+            ex.Redirect();
+        }
+        catch (Exception ex)
+        {
+            mensagemErro = ex.ToString();
+        }
+        finally
+        {
+            IsRunnig = false;
+        }
+    }
+
+
+    async Task SaveUserSchedule()
+    {
+        try
+        {
+
+            IsRunnig = true;
+            mensagemSucesso = "";
+            mensagemErro = "";
+
+            var response = await manageAccountsService.SaveUserSchedule(objUser, StartVMSchedule, StopVMSchedule, UserClaims);
+
+            if (response.Success)
+            {
+
+                mensagemSucesso = response.SuccessMessage;
+                ShowUserSchedulesPopUp = false;
+            }
+            else
+            {
+                mensagemErro = response.ErrorMessage;
+            }
+
+        }
+        catch (AccessTokenNotAvailableException ex)
+        {
+            ex.Redirect();
+        }
+        catch (Exception ex)
+        {
+            mensagemErro = ex.ToString();
+        }
+        finally
+        {
+            IsRunnig = false;
+        }
+
+
+    }
+
+    async Task SaveUser()
+    {
+        try
+        {
+
+            IsRunnig = true;
+            mensagemSucesso = "";
+            mensagemErro = "";
+
+            var response1 = await manageAccountsService.SaveUser(objUser, CurrentUserRole);
+
+            if (response1.Success)
+            {
+                if (!users.Contains(objUser))
+                {
+                    users.Add(objUser);
+                }
+
+                mensagemSucesso = response1.SuccessMessage;
+                ShowUserDetailPopUp = false;
+            }
+            else
+            {
+                mensagemErro = response1.ErrorMessage;
+            }
+
+        }
+        catch (AccessTokenNotAvailableException ex)
+        {
+            ex.Redirect();
+        }
+        catch (Exception ex)
+        {
+            mensagemErro = ex.ToString();
+        }
+        finally
+        {
+            IsRunnig = false;
+        }
+
+
+    }
+
+    async Task DeleteUser()
+    {
+        try
+        {
+            IsRunnig = true;
+
+            var response = await manageAccountsService.DeleteUser(objUser);
+
+            if (response.Success)
+            {
+                users.Remove(objUser);
+                mensagemSucesso = response.SuccessMessage;
+                ShowUserDetailPopUp = false;
+            }
+            else
+            {
+                mensagemErro = response.ErrorMessage;
+            }
+        }
+        catch (AccessTokenNotAvailableException ex)
+        {
+            ex.Redirect();
+        }
+        catch (Exception ex)
+        {
+            mensagemErro = ex.ToString();
+        }
+        finally
+        {
+            IsRunnig = false;
+        }
+    }
+
+    void ClosePopup()
+    {
+        // Close the Popup
+        ShowUserDetailPopUp = false;
+    }
+
+    void CloseSchedulePopup()
+    {
+        // Close the Popup
+        ShowUserSchedulesPopUp = false;
+    }
+
+
+    void NavigateToCustomersPage()
+    {
+        NavigationManager.NavigateTo("managecompanies");
+    }
+
+
+    void AddNewUser()
+    {
+        // Make new user
+        objUser = new UserModel();
+        objUser.Password = null;
+        objUser.Id = "";
+        CurrentUserRole = ROLES.CUSTOMER_NAME;
+        UserClaims = new List<AppClaimModel>();
+       // UserClaims.AddRange(ClienteClaims);
+        ShowUserDetailPopUp = true;
+    }
+
+
+
+    private void OnVMScheduleOnStartOrStopScheduleCheckboxChanged(ChangeEventArgs e, UserVMScheduling schedule, DayOfWeek day)
+    {
+        var actionType = eVMActionTypes.Start;
+
+
+        switch (day)
+        {
+            case DayOfWeek.Sunday:
+                schedule.WeekDaySunday = (bool)e.Value;
+                break;
+            case DayOfWeek.Monday:
+                schedule.WeekDayMonday = (bool)e.Value;
+                break;
+            case DayOfWeek.Tuesday:
+                schedule.WeekDayTuesday = (bool)e.Value;
+                break;
+            case DayOfWeek.Wednesday:
+                schedule.WeekDayWednesday = (bool)e.Value;
+                break;
+            case DayOfWeek.Thursday:
+                schedule.WeekDayThursday = (bool)e.Value;
+                break;
+            case DayOfWeek.Friday:
+                schedule.WeekDayFriday = (bool)e.Value;
+                break;
+            case DayOfWeek.Saturday:
+                schedule.WeekDaySaturday = (bool)e.Value;
+                break;
+            default:
+                break;
+        }
+
+    }
+
+    private void OnScheduleStopOnStartOrStopScheduleCheckboxChanged(ChangeEventArgs e, eDayOfWeekEF day)
+    {
+    }
+
+    private void OnStartOrStopScheduleCheckboxChanged(ChangeEventArgs e, AppClaimModel claim)
+    {
+        var i = AllPermissionClaims.FirstOrDefault(i => i.Type == claim.Type);
+        if (i != null)
+        {
+            if ((bool)e.Value)
+            {
+                UserClaims.Add(claim);
+            }
+            else
+            {
+                UserClaims.RemoveAll(f => f.Type.Equals(claim.Type, StringComparison.OrdinalIgnoreCase));
+            }
+        }
+
+        if (claim.Type.Equals(ClaimsConstants.PERMISSION_CLAIM_CAN_START_VM, StringComparison.OrdinalIgnoreCase))
+        {
+            StartVMScheduleIsDisabled = !(bool)e.Value;
+        }
+
+
+        if (claim.Type.Equals(ClaimsConstants.PERMISSION_CLAIM_CAN_STOP_VM, StringComparison.OrdinalIgnoreCase))
+        {
+            StopVMScheduleIsDisabled = !(bool)e.Value;
+        }
+
+
+    }
+    void OnSelectedRoleChanged(ChangeEventArgs e)
+    {
+        CurrentUserRole = (string)e.Value;
+
+        if (ROLES.ADMINISTRATOR_NAME.Equals(CurrentUserRole, StringComparison.OrdinalIgnoreCase))
+        {
+            UserClaims.Clear();
+            UserClaims.AddRange(AdminClaims);
+        }
+        else if (ROLES.CUSTOMER_NAME.Equals(CurrentUserRole, StringComparison.OrdinalIgnoreCase))
+        {
+            UserClaims.Clear();
+            UserClaims.AddRange(ClienteClaims);
+        }
+
+
+    }
+}

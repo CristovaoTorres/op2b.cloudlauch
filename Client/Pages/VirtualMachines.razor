@@ -1,0 +1,317 @@
+﻿@page "/virtualmachines"
+@page "/virtualmachines/{IdCompany:int}"
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.WebAssembly.Authentication
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Http
+@using Platform.Client.Extensions
+@using System.Security.Claims
+@attribute [Authorize]
+@inject HttpClient Http
+@inject Microsoft.Extensions.Logging.ILogger<VirtualMachines> logger
+@inject NavigationManager NavigationManager
+@inject ManageAccountsService manageAccountsService
+@inject IHttpContextAccessor httpContextAccessor
+@inject Platform.Client.Services.VirtualMachineService virtualMachineService
+<h3>Máquinas Virtuais</h3>
+
+<table class="table">
+    <thead>
+        <tr>
+            <th>Nome</th>
+            <th>Descrição</th>
+            <th>Cloud</th>
+            <th>Estado</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+
+        @if (virtualMachines == null)
+        {
+            <div class="spinner"></div>
+        }
+        else
+        {
+
+            @if (!virtualMachines.Any())
+            {
+                <p><em>Nenhum registro encontrado.<br />Verifique se concedido acesso à alguma VM</em></p>
+            }
+            else
+            {
+                @foreach (var vm in virtualMachines)
+                {
+    <tr>
+        <td>@vm.Name</td>
+        <td>@vm.Description</td>
+        <td>@vm.Cloud</td>
+        <td>
+            @if (vm.VMState == eVMPowerState.Unkown)
+            {
+                <p><em>Processando...</em></p>
+            }
+            else if (vm.VMState == eVMPowerState.Stopped)
+            {
+                <p><em>Parado</em></p>
+            }
+            else if (vm.VMState == eVMPowerState.Started)
+            {
+                <p><em>Em execução</em></p>
+            }
+            else if (vm.VMState == eVMPowerState.Starting)
+            {
+                <p><em>Tentando iniciar...</em></p>
+            }
+            else if (vm.VMState == eVMPowerState.Stopping)
+            {
+                <p><em>Tentando parar...</em></p>
+            }
+        </td>
+
+        <td>
+
+            <AuthorizeView>
+                <Authorized>
+                    @if (vm.VMState == eVMPowerState.Unkown || vm.VMState == eVMPowerState.Starting || vm.VMState == eVMPowerState.Stopping)
+                    {
+                        <img src="images/ajax-spinner.gif" alt="Loading..." style="height:30px" />
+                    }
+                    else if (vm.VMState == eVMPowerState.Stopped)
+                    {
+                        <button class="btn btn-success" @onclick="(() => StartVM(vm))" disabled="@vm.CannotStart">
+                            Iniciar
+                        </button>
+
+                    }
+                    else if (vm.VMState == eVMPowerState.Started)
+                    {
+                        <button class="btn btn-primary" @onclick="(() => StopVM(vm))" disabled="@vm.CannotStop"> Parar</button>
+                    }
+                </Authorized>
+            </AuthorizeView>
+
+
+        </td>
+
+
+    </tr>
+                }
+            }
+
+        }
+
+    </tbody>
+</table>
+
+
+<button class="btn btn-primary" @onclick="RefreshUI">Atualizar</button>
+
+@code {
+    [Parameter]
+    public int IdCompany { get; set; }
+
+    [CascadingParameter]
+    private Task<AuthenticationState> authenticationStateTask { get; set; }
+
+    private CompanyModel currentCompany;
+    private List<VirtualMachineModel> virtualMachines;
+    private string mensagemErro;
+    private string CurrentUserRole;
+    private string mensagemSucesso;
+    private bool ShowPopup;
+    private List<RoleModel> Roles;
+    private string companyName = "";
+
+    private System.Timers.Timer _timer;
+
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await TryRefreshUIAsync();
+        }
+        catch (AccessTokenNotAvailableException ex)
+        {
+            ex.Redirect();
+        }
+        catch (Exception ex)
+        {
+            mensagemErro = ex.ToString();
+        }
+    }
+
+    private bool isRefreshingUI = false;
+    public async void RefreshUI()
+    {
+        if (await TryRefreshUIAsync())
+        {
+            StateHasChanged();
+        }
+    }
+
+    public async Task<bool> TryRefreshUIAsync()
+    {
+        Console.WriteLine("<<<< TryRefreshUIAsync foi chamado <<<<");
+
+        if (isRefreshingUI)
+        {
+            return false;
+        }
+
+        if (_timer != null)
+        {
+            return false;
+        }
+
+        try
+        {
+
+            isRefreshingUI = true;
+
+            mensagemSucesso = "";
+            mensagemErro = "";
+
+            var virtualMachinesTask = Http.GetFromJsonAsync<List<VirtualMachineModel>>($"ManageVirtualMachine");
+
+            virtualMachines = await virtualMachinesTask;
+
+            var loggedInUser = (await authenticationStateTask).User;
+            await PrepareVirtualMachinePermissions(loggedInUser, virtualMachines);
+
+
+            _timer = new System.Timers.Timer(100);
+            _timer.Elapsed += async (s, e) =>
+            {
+                _timer.Stop();
+
+                CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
+                if (await virtualMachineService.TryGetStatusAsync(virtualMachines))
+                {
+                    InvokeAsync(() => StateHasChanged());
+                }
+
+                _timer.Dispose();
+                _timer = null;
+            };
+            _timer.Enabled = true;
+        }
+        catch (Exception)
+        {
+
+            throw;
+        }
+        finally
+        {
+            isRefreshingUI = false;
+        }
+
+        return true;
+    }
+
+    private static void SetVirtualMachinesPermissions(List<VirtualMachineModel> virtualMachines, bool canStart, bool canStop)
+    {
+        foreach (var vm in virtualMachines)
+        {
+            vm.CannotStart = !canStart;
+            vm.CannotStop = !canStop;
+        }
+
+        Console.WriteLine($"CannotStart:{!canStart}, CannotStop:{!canStop}");
+    }
+
+    private async Task PrepareVirtualMachinePermissions(ClaimsPrincipal loggedInUser, List<VirtualMachineModel> virtualMachines)
+    {
+
+        bool canStartVirtualMachines = true;
+        bool canStopVirtualMachines = true;
+
+
+        if (loggedInUser.IsAdmin())
+        {
+            Console.WriteLine($"Admin detectado! Acesso total ao controle de VMs");
+            SetVirtualMachinesPermissions(virtualMachines, true, true);
+            return;
+        }
+
+        if (!loggedInUser.CanStartVirtualMachine())
+        {
+            Console.WriteLine($"CanStartVirtualMachine:{loggedInUser.CanStartVirtualMachine()}");
+            canStartVirtualMachines = false;
+        }
+
+        if (!loggedInUser.CanStoptVirtualMachine())
+        {
+            Console.WriteLine($"CanStoptVirtualMachine:{loggedInUser.CanStoptVirtualMachine()}");
+            canStopVirtualMachines = false;
+        }
+
+        if (!canStopVirtualMachines && !canStartVirtualMachines)
+        {
+            SetVirtualMachinesPermissions(virtualMachines, canStartVirtualMachines, canStopVirtualMachines);
+            return;
+        }
+
+        loggedInUser = (await authenticationStateTask).User;
+        var loggedInUserId = loggedInUser.FindFirstValue("sub");
+
+        Console.WriteLine($"User Logado: {loggedInUserId}");
+        var schedules = await manageAccountsService.GetSchedulingsAsync(loggedInUserId);
+
+
+        if (canStartVirtualMachines)
+        {
+            var startVMSchedule = schedules.Item.FirstOrDefault(f => f.ActionType == eVMActionTypes.Start);
+
+            if (startVMSchedule == null)
+            {
+                Console.WriteLine($"StartVMSchedule is null");
+                canStartVirtualMachines = false;
+            }
+            else
+            {
+                Console.WriteLine($"StartVMSchedule is not null");
+                canStartVirtualMachines = virtualMachineService.CanExecuteNow(startVMSchedule);
+            }
+
+        }
+
+
+        if (canStopVirtualMachines)
+        {
+            var stopVMSchedule = schedules.Item.FirstOrDefault(f => f.ActionType == eVMActionTypes.Stop);
+
+            if (stopVMSchedule == null)
+            {
+                Console.WriteLine($"StopVMSchedule is null");
+                canStopVirtualMachines = false;
+            }
+            else
+            {
+                Console.WriteLine($"StopVMSchedule is not null");
+                canStopVirtualMachines = virtualMachineService.CanExecuteNow(stopVMSchedule);
+            }
+        }
+
+
+        SetVirtualMachinesPermissions(virtualMachines, canStartVirtualMachines, canStopVirtualMachines);
+    }
+
+
+
+    private async Task StopVM(VirtualMachineModel vm)
+    {
+        var response = await virtualMachineService.StopVMAsync(vm);
+    }
+
+    private async Task StartVM(VirtualMachineModel vm)
+    {
+        var response = await virtualMachineService.StartVMAsync(vm);
+    }
+
+
+
+
+
+}
